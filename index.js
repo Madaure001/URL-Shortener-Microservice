@@ -4,6 +4,8 @@ const cors = require('cors');
 const app = express();
 let bodyParser = require('body-parser');
 let mongoose = require('mongoose');
+const validURL = require('valid-url');
+
 
 mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
@@ -24,68 +26,70 @@ app.get('/', function(req, res) {
 
 let urlSchema = new mongoose.Schema({
                     //store original URL
-                    original: {
+                    originalURL: {
                       type: String,
                       required: true
                     },
-                    short: {type : Number}     //to enable us to get the original from the short
+                    shortURL: {type: Number},     //to enable us to get the original from the short
 })
 
-let Url = mongoose.model('Url', urlSchema);
+let URL = mongoose.model('URL', urlSchema);
 
-let responseObject = {};
+// Response for POST request
+app.post('/api/shorturl/', bodyParser.urlencoded({extended: false}), async (req, res) => {
 
-app.post('/api/shorturl', bodyParser.urlencoded({extended: false}), (req, res) => {
+  const { url } = req.body;
+  const shortURL = Math.floor(Math.random()*1000);
+  console.log(validURL.isUri(url));
 
-  let inputUrl = req.body['url']
-
-  let urlRegex = new RegExp(/[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi)
-
-  //check the validity of the url
-  if(!inputUrl.match(urlRegex)){
-    res.json({error: 'Invalid URL'})
-    return
-  }
-
-  responseObject['original_url'] = inputUrl
-  //find the highest shorturl number and update for new entries
-
-  let inputShort = 1
-  Url.findOne({})
-      .sort({short: 'desc'})      
-      .exec((error, result)=> {
-        if (!error && result != undefined){   //increment the short url for none empty DB
-          inputShort = result.short + 1
+    //.save does not accpet callbacks
+  if (validURL.isWebUri(url) === undefined) {
+    res.json({
+        error: 'invalid url',
+      });
+  } else {
+    try {
+      let findOne = await URL.findOne({
+        originalURL: url,
+      });
+      if (findOne) {
+        res.json({
+          original_url: findOne.originalURL,
+          short_url: findOne.shortURL,
+        });
+      } else {
+        findOne = new URL({
+          originalURL: url,
+          shortURL,
+        });
+        await findOne.save();
+        res.json({
+            original_url: findOne.originalURL,
+            short_url: findOne.shortURL,
+          });
         }
-        if(!error){
-          Url.findOneAndUpdate(   //update for entries that already exist in DB
-            {original: inputUrl},
-            {original: inputUrl, short: inputShort},
-            {new: true, upsert: true},
-            (error, savedUrl) => {
-              if(!error){
-                responseObject['short_url'] = savedUrl.short
-                res.json(responseObject)
-              }
-            }
-          )
-        }
-      })  
-})
-
-app.get('/api/shorturl/:input', (req, res) => {
-  
-  let input = req.params.input
-
-  
-  Url.findOne({short: input}, (error, result) => {
-    if(!error && result != undefined){
-      res.redirect(result.original)
-    }else{
-      res.json('URL not found')
+    } catch (err) {
+        console.log(err);
+        res.status(500).json('Server error..');
     }
-  })
-})
+  }
+  });
+  
+  // Redirect shortened URL to Original URL
+  app.get('/api/shorturl/:shortURL?', async (req, res) => {
+    try {
+      const urlParams = await URL.findOne({
+        shortURL: req.params.shortURL,
+      });
+      if (urlParams) {
+        return res.redirect(urlParams.originalURL);
+      }
+      return res.status(404).json('No URL found');
+    } catch (err) {
+      console.log(err);
+      res.status(500).json('Server error..');
+    }
+  });
 
 
 app.listen(port, function() {
